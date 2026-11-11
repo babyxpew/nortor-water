@@ -175,4 +175,66 @@ function adminData(token){
     pending:orders.filter(r=>r[6]==='PENDING'||r[6]==='CASH_PENDING').length,
     verifying:orders.filter(r=>r[6]==='VERIFYING').length,
     cashPending:orders.filter(r=>r[6]==='CASH_PENDING').length,
-    orders:orders.slice().reverse().map(r=>({id:r[0],at:fmt_(r[1]),buyer:r[2],
+    orders:orders.slice().reverse().map(r=>({id:r[0],at:fmt_(r[1]),buyer:r[2],qty:r[3],price:r[4],total:r[5],status:r[6],slip:!!r[7],note:r[9],method:r[11]||(r[6]==='CASH_PENDING'?'CASH':'PROMPTPAY')}))
+  };
+}
+function adminSlipUrl(token,orderId){requireAdmin_(token);const f=lookup_(N.ORDERS,1,orderId);if(!f||!f.values[7])throw Error('ไม่มีไฟล์สลิป');return DriveApp.getFileById(f.values[7]).getUrl();}
+function adminDecision(token,orderId,decision,note){
+  requireAdmin_(token);const lock=LockService.getScriptLock();lock.waitLock(20000);
+  try{
+    const o=lookup_(N.ORDERS,1,orderId);if(!o)throw Error('ไม่พบรายการ');
+    if(o.values[6]==='PAID')throw Error('รายการชำระแล้ว');
+    if(o.values[6]==='CASH_PENDING')throw Error('รายการเงินสดต้องใช้ปุ่มยืนยันรับเงินสด');
+    const payment=lookup_(N.PAYMENTS,2,orderId);
+    if(decision==='APPROVE'){
+      if(o.values[6]!=='VERIFYING'||!o.values[7])throw Error('ต้องมีสลิปที่รอตรวจสอบ');
+      const now=new Date();sheet_(N.ORDERS).getRange(o.row,7).setValue('PAID');sheet_(N.ORDERS).getRange(o.row,9).setValue(now);
+      if(payment){sheet_(N.PAYMENTS).getRange(payment.row,4).setValue('PAID');sheet_(N.PAYMENTS).getRange(payment.row,7).setValue(now);}
+    }else if(decision==='REJECT'){
+      sheet_(N.ORDERS).getRange(o.row,7).setValue('PENDING');
+      if(payment)sheet_(N.PAYMENTS).getRange(payment.row,4).setValue('PENDING');
+    }else throw Error('คำสั่งไม่ถูกต้อง');
+    sheet_(N.ORDERS).getRange(o.row,10).setValue(safe_(note,250));
+    return {ok:true};
+  }finally{lock.releaseLock();}
+}
+/** Only the authenticated owner can confirm physically received cash. */
+function adminConfirmCash(token,orderId){
+  requireAdmin_(token);
+  const lock=LockService.getScriptLock();lock.waitLock(20000);
+  try{
+    const order=lookup_(N.ORDERS,1,safe_(orderId,80));
+    if(!order)throw Error('ไม่พบรายการ');
+    if(order.values[6]==='PAID')return {ok:true,message:'รายการนี้ชำระแล้ว'};
+    if(order.values[6]!=='CASH_PENDING'||String(order.values[11]||'')!=='CASH')throw Error('รายการนี้ไม่ใช่เงินสดที่รอยืนยัน');
+    const now=new Date();
+    sheet_(N.ORDERS).getRange(order.row,7).setValue('PAID');
+    sheet_(N.ORDERS).getRange(order.row,9).setValue(now);
+    sheet_(N.ORDERS).getRange(order.row,10).setValue('เจ้าของร้านยืนยันว่าได้รับเงินสดแล้ว');
+    const payment=lookup_(N.PAYMENTS,2,orderId);
+    if(payment){sheet_(N.PAYMENTS).getRange(payment.row,4).setValue('PAID');sheet_(N.PAYMENTS).getRange(payment.row,7).setValue(now);}
+    return {ok:true,message:'ยืนยันรับเงินสดสำเร็จ'};
+  }finally{lock.releaseLock();}
+}
+function adminSavePromptPay(token,promptpay,account){
+  requireAdmin_(token);promptpay=safe_(promptpay,30);account=safe_(account,120);
+  if(promptpay&&!/^[0-9\-]{10,20}$/.test(promptpay))throw Error('กรุณาตรวจสอบเลขพร้อมเพย์');
+  setSetting_('PROMPTPAY_ID',promptpay);setSetting_('PROMPTPAY_NAME',account);
+  return {ok:true};
+}
+function adminLabels(token){
+  requireAdmin_(token);
+  let url=PropertiesService.getScriptProperties().getProperty('PUBLIC_WEB_APP_URL') || '';
+  // ล้างส่วน /u/0/ หรือ /u/1/ ออกเพื่อป้องกันลิงก์ติดเซสชันสลับบัญชี Google
+  url = url.replace(/\/u\/\d+/, '');
+  if(!url) throw Error('ต้องกำหนด PUBLIC_WEB_APP_URL ใน Script Properties ก่อน');
+  return table_(N.BOTTLES).filter(r=>r[2]==='AVAILABLE').map(r=>({id:r[0],url:url+(url.includes('?')?'&':'?')+'b='+encodeURIComponent(r[1])}));
+}
+function ss_(){const id=PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');if(!id)throw Error('ยังไม่ได้รัน setupNewStore');return SpreadsheetApp.openById(id);}
+function sheet_(n){const s=ss_().getSheetByName(n);if(!s)throw Error('ไม่พบชีต '+n);return s;}
+function table_(n){const s=sheet_(n);return s.getLastRow()<2?[]:s.getRange(2,1,s.getLastRow()-1,s.getLastColumn()).getValues();}
+function lookup_(n,col,value){const s=sheet_(n);if(s.getLastRow()<2)return null;const cell=s.getRange(2,col,s.getLastRow()-1,1).createTextFinder(value).matchEntireCell(true).findNext();return cell?{row:cell.getRow(),values:s.getRange(cell.getRow(),1,1,s.getLastColumn()).getValues()[0]}:null;}
+function setting_(key){const f=lookup_(N.SETTINGS,1,key);return f?String(f.values[1]):'';}
+function setSetting_(key,value){const f=lookup_(N.SETTINGS,1,key);if(f)sheet_(N.SETTINGS).getRange(f.row,2).setValue(value);else sheet_(N.SETTINGS).appendRow([key,value]);}
+function safe_(s,max){return String(s==null?'':s).trim().replace(/[<>]/g,'').slice(0,max);}
+function fmt_(d){return d?Utilities.formatDate(new Date(d),Session.getScriptTimeZone(),'dd/MM/yyyy HH:mm'):'';}
