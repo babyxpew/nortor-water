@@ -1,0 +1,205 @@
+/** Nortor by faii — NEW independent store. Google Sheets-bound Apps Script. */
+const N = Object.freeze({
+  BRAND: 'Nortor by faii', PRICE: 50, STARTING_BOTTLES: 50,
+  BOTTLES:'Bottles', ORDERS:'Orders', ITEMS:'OrderItems', PAYMENTS:'Payments', LOG:'StockLog', SETTINGS:'Settings'
+});
+
+function doGet(e) {
+  const page = HtmlService.createTemplateFromFile('Index');
+  page.firstToken = (e && e.parameter && e.parameter.b) ? String(e.parameter.b) : '';
+  return page.evaluate().setTitle(N.BRAND).addMetaTag('viewport','width=device-width,initial-scale=1');
+}
+function include_(name) { return HtmlService.createHtmlOutputFromFile(name).getContent(); }
+
+/** RUN ONCE, from this new Sheet (Extensions > Apps Script). Does not touch other projects. */
+function setupNewStore() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) throw Error('โปรดสร้างโปรเจกต์ผ่าน Google Sheets ใหม่: Extensions > Apps Script');
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty('STORE_READY') === 'YES') throw Error('ตั้งค่าร้านนี้ไปแล้ว ไม่ต้องรันซ้ำ');
+  props.setProperty('SPREADSHEET_ID',ss.getId());
+  const defs = [
+    [N.BOTTLES,['bottle_id','token','status','created_at','order_id','updated_at']],
+    [N.ORDERS,['order_id','created_at','buyer_name','qty','unit_price','total','status','slip_id','paid_at','note','claim_key','payment_method']],
+    [N.ITEMS,['order_id','bottle_id','unit_price']],
+    [N.PAYMENTS,['payment_id','order_id','amount','status','slip_id','submitted_at','verified_at','payment_method']],
+    [N.LOG,['logged_at','bottle_id','action','order_id','note']],
+    [N.SETTINGS,['key','value']]
+  ];
+  defs.forEach(([name,heads])=> {
+    let sh=ss.getSheetByName(name);
+    if (sh && sh.getLastRow()>0) throw Error('มีข้อมูลในชีต '+name+' แล้ว โปรดสร้าง Google Sheets ใหม่เพื่อป้องกันการทับข้อมูล');
+    if(!sh) sh=ss.insertSheet(name);
+    sh.appendRow(heads);sh.setFrozenRows(1);
+    sh.getRange(1,1,1,heads.length).setFontWeight('bold').setBackground('#eaf4fb');
+  });
+  const now=new Date(), bottles=[];
+  for(let i=1;i<=N.STARTING_BOTTLES;i++){
+    bottles.push(['NBF-'+String(i).padStart(3,'0'),Utilities.getUuid().replace(/-/g,''),'AVAILABLE',now,'',now]);
+  }
+  sheet_(N.BOTTLES).getRange(2,1,bottles.length,6).setValues(bottles);
+  sheet_(N.SETTINGS).getRange(2,1,3,2).setValues([
+    ['PRICE_BAHT',String(N.PRICE)],['PROMPTPAY_ID',''],['PROMPTPAY_NAME','']
+  ]);
+  props.setProperty('STORE_READY','YES');
+  return 'สร้างร้านใหม่สำเร็จ 50 ขวด ขวดละ 50 บาท';
+}
+
+/** Safe upgrade for a store already created with the 50-bottle edition. Run once after replacing Code.gs. */
+function enableCashPayments() {
+  const ss=ss_();
+  [
+    [N.ORDERS,12,'payment_method'],
+    [N.PAYMENTS,8,'payment_method']
+  ].forEach(([tab,col,header])=>{
+    const sheet=ss.getSheetByName(tab);
+    if(!sheet) throw Error('ไม่พบชีต '+tab);
+    const old=String(sheet.getRange(1,col).getValue()||'').trim();
+    if(old && old!==header)throw Error('คอลัมน์ '+col+' ของ '+tab+' มีข้อมูลอื่นอยู่แล้ว กรุณาตรวจสอบก่อน');
+    sheet.getRange(1,col).setValue(header);
+    sheet.getRange(1,col).setFontWeight('bold').setBackground('#eaf4fb');
+  });
+  return 'เพิ่มวิธีชำระเงินสดสำเร็จ ข้อมูลเก่ายังคงอยู่และไม่สร้างขวดใหม่';
+}
+function publicConfig() { return {price:N.PRICE,brand:N.BRAND,promptpay:setting_('PROMPTPAY_ID'),account:setting_('PROMPTPAY_NAME')}; }
+function bottleLookup(token){
+  const f=lookup_(N.BOTTLES,2,safe_(token,100));
+  if(!f)throw Error('QR ไม่ถูกต้องหรือไม่ใช่ของร้านนี้');
+  return {id:String(f.values[0]), available:f.values[2]==='AVAILABLE', status:String(f.values[2])};
+}
+function checkout(payload){
+  const buyer=safe_(payload&&payload.name,80);
+  const method=String(payload&&payload.paymentMethod||'PROMPTPAY').toUpperCase();
+  if(!['PROMPTPAY','CASH'].includes(method))throw Error('วิธีชำระเงินไม่ถูกต้อง');
+  const tokens=Array.isArray(payload&&payload.tokens)?payload.tokens.map(x=>safe_(x,100)):[];
+  if(!buyer)throw Error('กรุณากรอกชื่อผู้ซื้อ');
+  if(!tokens.length||tokens.length>50)throw Error('เลือกรายการ 1–50 ขวด');
+  if(new Set(tokens).size!==tokens.length)throw Error('มี QR ซ้ำในตะกร้า');
+  const lock=LockService.getScriptLock();lock.waitLock(20000);
+  try{
+    const matches=tokens.map(token=>{
+      const f=lookup_(N.BOTTLES,2,token);
+      if(!f)throw Error('มี QR ที่ไม่ถูกต้อง');
+      if(f.values[2]!=='AVAILABLE')throw Error('ขวด '+f.values[0]+' ถูกทำรายการแล้ว');
+      return f;
+    });
+    const now=new Date(), id='NBF-'+Utilities.getUuid().slice(0,10).toUpperCase();
+    const secret=Utilities.getUuid().replace(/-/g,'')+Utilities.getUuid().replace(/-/g,'');
+    const qty=matches.length,total=qty*N.PRICE;
+    // Append the order before claiming bottles; LockService prevents a competing checkout.
+    const orderStatus=method==='CASH'?'CASH_PENDING':'PENDING';
+    sheet_(N.ORDERS).appendRow([id,now,buyer,qty,N.PRICE,total,orderStatus,'', '', '',secret,method]);
+    sheet_(N.ITEMS).getRange(sheet_(N.ITEMS).getLastRow()+1,1,qty,3)
+      .setValues(matches.map(f=>[id,f.values[0],N.PRICE]));
+    const bs=sheet_(N.BOTTLES);
+    matches.forEach(f=>bs.getRange(f.row,3,1,4).setValues([['CLAIMED',f.values[3],id,now]]));
+    sheet_(N.PAYMENTS).appendRow(['PAY-'+Utilities.getUuid().slice(0,8),id,total,orderStatus,'',now,'',method]);
+    const logs=sheet_(N.LOG);
+    logs.getRange(logs.getLastRow()+1,1,qty,5).setValues(matches.map(f=>[now,f.values[0],'SOLD_RECORDED',id,'ลูกค้ากดยืนยันหยิบ']));
+    return {orderId:id,secret:secret,qty:qty,total:total,status:orderStatus,paymentMethod:method};
+  }finally{lock.releaseLock();}
+}
+function uploadSlip(p){
+  const orderId=safe_(p&&p.orderId,80),secret=safe_(p&&p.secret,100);
+  const f=lookup_(N.ORDERS,1,orderId);
+  if(!f||!secret||f.values[10]!==secret)throw Error('ไม่มีสิทธิ์ส่งสลิปของรายการนี้');
+  if(String(f.values[11]||'PROMPTPAY')==='CASH')throw Error('รายการเงินสดไม่ต้องแนบสลิป');
+  if(!['PENDING','VERIFYING'].includes(String(f.values[6])))throw Error('รายการนี้ปิดไปแล้ว');
+  const mime=String(p.mime||'');let content=String(p.data||'');
+  if(!['image/jpeg','image/png','image/webp'].includes(mime))throw Error('รองรับภาพ JPG PNG WEBP');
+  if(content.length>4600000)throw Error('ภาพใหญ่เกินไป โปรดใช้ไฟล์ไม่เกิน 3 MB');
+  content=content.replace(/^data:[^,]+,/, '');
+  const bytes=Utilities.base64Decode(content);
+  const ext=mime==='image/jpeg'?'jpg':mime.split('/')[1];
+  const it=DriveApp.getFoldersByName('Nortor Faii - Private Slips');
+  const folder=it.hasNext()?it.next():DriveApp.createFolder('Nortor Faii - Private Slips');
+  const file=folder.createFile(Utilities.newBlob(bytes,mime,orderId+'.'+ext));
+  file.setSharing(DriveApp.Access.PRIVATE,DriveApp.Permission.NONE);
+  sheet_(N.ORDERS).getRange(f.row,7).setValue('VERIFYING');
+  sheet_(N.ORDERS).getRange(f.row,8).setValue(file.getId());
+  const payment=lookup_(N.PAYMENTS,2,orderId);
+  if(payment){sheet_(N.PAYMENTS).getRange(payment.row,4).setValue('VERIFYING');sheet_(N.PAYMENTS).getRange(payment.row,5).setValue(file.getId());sheet_(N.PAYMENTS).getRange(payment.row,6).setValue(new Date());}
+  return {status:'VERIFYING'};
+}
+function loginAdmin(password){
+  const expected=PropertiesService.getScriptProperties().getProperty('ADMIN_PASSWORD');
+  if(!expected)throw Error('ยังไม่ได้ตั้ง ADMIN_PASSWORD ใน Script Properties');
+  if(expected!==String(password))throw Error('รหัสผ่านไม่ถูกต้อง');
+  const token=Utilities.getUuid()+Utilities.getUuid();
+  CacheService.getScriptCache().put('ADMIN_'+token,'yes',18000);
+  return {token:token};
+}
+function requireAdmin_(token){if(!token||CacheService.getScriptCache().get('ADMIN_'+token)!=='yes')throw Error('กรุณาเข้าสู่ระบบ Admin ใหม่');}
+function adminData(token){
+  requireAdmin_(token);
+  const orders=table_(N.ORDERS),bottles=table_(N.BOTTLES),today=new Date();today.setHours(0,0,0,0);
+  return {
+    available:bottles.filter(r=>r[2]==='AVAILABLE').length,
+    claimed:bottles.filter(r=>r[2]==='CLAIMED').length,
+    paidToday:orders.filter(r=>r[6]==='PAID'&&r[8]&&new Date(r[8])>=today).reduce((s,r)=>s+Number(r[5]),0),
+    pending:orders.filter(r=>r[6]==='PENDING'||r[6]==='CASH_PENDING').length,
+    verifying:orders.filter(r=>r[6]==='VERIFYING').length,
+    cashPending:orders.filter(r=>r[6]==='CASH_PENDING').length,
+    orders:orders.slice().reverse().map(r=>({id:r[0],at:fmt_(r[1]),buyer:r[2],qty:r[3],price:r[4],total:r[5],status:r[6],slip:!!r[7],note:r[9],method:r[11]||(r[6]==='CASH_PENDING'?'CASH':'PROMPTPAY')}))
+  };
+}
+function adminSlipUrl(token,orderId){requireAdmin_(token);const f=lookup_(N.ORDERS,1,orderId);if(!f||!f.values[7])throw Error('ไม่มีไฟล์สลิป');return DriveApp.getFileById(f.values[7]).getUrl();}
+function adminDecision(token,orderId,decision,note){
+  requireAdmin_(token);const lock=LockService.getScriptLock();lock.waitLock(20000);
+  try{
+    const o=lookup_(N.ORDERS,1,orderId);if(!o)throw Error('ไม่พบรายการ');
+    if(o.values[6]==='PAID')throw Error('รายการชำระแล้ว');
+    if(o.values[6]==='CASH_PENDING')throw Error('รายการเงินสดต้องใช้ปุ่มยืนยันรับเงินสด');
+    const payment=lookup_(N.PAYMENTS,2,orderId);
+    if(decision==='APPROVE'){
+      if(o.values[6]!=='VERIFYING'||!o.values[7])throw Error('ต้องมีสลิปที่รอตรวจสอบ');
+      const now=new Date();sheet_(N.ORDERS).getRange(o.row,7).setValue('PAID');sheet_(N.ORDERS).getRange(o.row,9).setValue(now);
+      if(payment){sheet_(N.PAYMENTS).getRange(payment.row,4).setValue('PAID');sheet_(N.PAYMENTS).getRange(payment.row,7).setValue(now);}
+    }else if(decision==='REJECT'){
+      sheet_(N.ORDERS).getRange(o.row,7).setValue('PENDING');
+      if(payment)sheet_(N.PAYMENTS).getRange(payment.row,4).setValue('PENDING');
+    }else throw Error('คำสั่งไม่ถูกต้อง');
+    sheet_(N.ORDERS).getRange(o.row,10).setValue(safe_(note,250));
+    return {ok:true};
+  }finally{lock.releaseLock();}
+}
+/** Only the authenticated owner can confirm physically received cash. */
+function adminConfirmCash(token,orderId){
+  requireAdmin_(token);
+  const lock=LockService.getScriptLock();lock.waitLock(20000);
+  try{
+    const order=lookup_(N.ORDERS,1,safe_(orderId,80));
+    if(!order)throw Error('ไม่พบรายการ');
+    if(order.values[6]==='PAID')return {ok:true,message:'รายการนี้ชำระแล้ว'};
+    if(order.values[6]!=='CASH_PENDING'||String(order.values[11]||'')!=='CASH')throw Error('รายการนี้ไม่ใช่เงินสดที่รอยืนยัน');
+    const now=new Date();
+    sheet_(N.ORDERS).getRange(order.row,7).setValue('PAID');
+    sheet_(N.ORDERS).getRange(order.row,9).setValue(now);
+    sheet_(N.ORDERS).getRange(order.row,10).setValue('เจ้าของร้านยืนยันว่าได้รับเงินสดแล้ว');
+    const payment=lookup_(N.PAYMENTS,2,orderId);
+    if(payment){sheet_(N.PAYMENTS).getRange(payment.row,4).setValue('PAID');sheet_(N.PAYMENTS).getRange(payment.row,7).setValue(now);}
+    return {ok:true,message:'ยืนยันรับเงินสดสำเร็จ'};
+  }finally{lock.releaseLock();}
+}
+function adminSavePromptPay(token,promptpay,account){
+  requireAdmin_(token);promptpay=safe_(promptpay,30);account=safe_(account,120);
+  if(promptpay&&!/^[0-9\-]{10,20}$/.test(promptpay))throw Error('กรุณาตรวจสอบเลขพร้อมเพย์');
+  setSetting_('PROMPTPAY_ID',promptpay);setSetting_('PROMPTPAY_NAME',account);
+  return {ok:true};
+}
+/** For this 50-bottle edition, this ONLY prints the existing AVAILABLE bottles. */
+function adminLabels(token){
+  requireAdmin_(token);
+  const url=PropertiesService.getScriptProperties().getProperty('PUBLIC_WEB_APP_URL');
+  if(!url||!/^https:\/\/script\.google\.com\/macros\/s\/[^/]+\/exec$/.test(url))
+    throw Error('ต้องกำหนด PUBLIC_WEB_APP_URL เป็นลิงก์ /exec จริง ใน Script Properties ก่อน');
+  return table_(N.BOTTLES).filter(r=>r[2]==='AVAILABLE').map(r=>({id:r[0],url:url+'?b='+encodeURIComponent(r[1])}));
+}
+function ss_(){const id=PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');if(!id)throw Error('ยังไม่ได้รัน setupNewStore');return SpreadsheetApp.openById(id);}
+function sheet_(n){const s=ss_().getSheetByName(n);if(!s)throw Error('ไม่พบชีต '+n);return s;}
+function table_(n){const s=sheet_(n);return s.getLastRow()<2?[]:s.getRange(2,1,s.getLastRow()-1,s.getLastColumn()).getValues();}
+function lookup_(n,col,value){const s=sheet_(n);if(s.getLastRow()<2)return null;const cell=s.getRange(2,col,s.getLastRow()-1,1).createTextFinder(value).matchEntireCell(true).findNext();return cell?{row:cell.getRow(),values:s.getRange(cell.getRow(),1,1,s.getLastColumn()).getValues()[0]}:null;}
+function setting_(key){const f=lookup_(N.SETTINGS,1,key);return f?String(f.values[1]):'';}
+function setSetting_(key,value){const f=lookup_(N.SETTINGS,1,key);if(f)sheet_(N.SETTINGS).getRange(f.row,2).setValue(value);else sheet_(N.SETTINGS).appendRow([key,value]);}
+function safe_(s,max){return String(s==null?'':s).trim().replace(/[<>]/g,'').slice(0,max);}
+function fmt_(d){return d?Utilities.formatDate(new Date(d),Session.getScriptTimeZone(),'dd/MM/yyyy HH:mm'):'';}
