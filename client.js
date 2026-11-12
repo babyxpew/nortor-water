@@ -1,5 +1,5 @@
 // 1. ระบุ Web App URL ของ Google Apps Script
-const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbynGYcLN3jV7EKB3IDR-RQmS5I82HWS_6ENnmDCFatHtX7CUVy6g7GtsrU_LpNfsAA68A/exec";
+const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxU2DaXHWLU_WCqDHhEGit-GSZP3XePDbZtiEuNTTBpxFj6dxmB6x8M30hJ6nCRV693/exec";
 
 const $=id=>document.getElementById(id);
 const STORAGE_CART='nortor_fresh_cart_2026';
