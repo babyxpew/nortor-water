@@ -1,29 +1,56 @@
-<script>
+// 1. ระบุ Web App URL ของ Google Apps Script (ใส่ URL /exec ของคุณ Chutima)
+const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbynGYcLN3jV7EKB3IDR-RQmS5I82HWS_6ENnmDCFatHtX7CUVy6g7GtsrU_LpNfsAA68A/exec";
+
 const $=id=>document.getElementById(id);
 const STORAGE_CART='nortor_fresh_cart_2026';
 const STORAGE_PENDING='nortor_fresh_pending_2026';
 let cart=[],config=null,adminToken=null,pendingOrder=null;
-const call=(name,...args)=>new Promise((resolve,reject)=>google.script.run.withSuccessHandler(resolve).withFailureHandler(err=>reject(new Error(err.message||String(err))))[name](...args));
+
+// 2. ปรับฟังก์ชัน call ให้ใช้ fetch API แทน google.script.run
+async function call(name, ...args) {
+  try {
+    const response = await fetch(WEB_APP_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: name, args: args })
+    });
+    const result = await response.json();
+    if (result.error) throw new Error(result.error);
+    return result.data;
+  } catch (err) {
+    throw new Error(err.message || String(err));
+  }
+}
+
 function notify(msg){const e=$('toast');e.textContent=msg;e.classList.add('show');clearTimeout(window.toastTimer);window.toastTimer=setTimeout(()=>e.classList.remove('show'),3500)}
 function html(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function readJson(k,fallback){try{return JSON.parse(localStorage.getItem(k))||fallback}catch(e){return fallback}}
 function screen(id){['shop','adminLogin','admin'].forEach(x=>$(x).classList.add('hidden'));$(id).classList.remove('hidden')}
+
 async function boot(){
   try{config=await call('publicConfig');$('payId').textContent=config.promptpay?(config.promptpay+' · '+config.account):'ยังไม่ได้ตั้งเลขพร้อมเพย์';}catch(e){notify(e.message)}
   cart=readJson(STORAGE_CART,[]);
   pendingOrder=readJson(STORAGE_PENDING,null);
-  if(FIRST_TOKEN){try{
-    const bottle=await call('bottleLookup',FIRST_TOKEN);
-    if(!bottle.available)notify('ขวด '+bottle.id+' เคยถูกบันทึกแล้ว');
-    else if(cart.some(x=>x.token===FIRST_TOKEN))notify('ขวดนี้อยู่ในตะกร้าแล้ว');
-    else{cart.push({token:FIRST_TOKEN,id:bottle.id});localStorage.setItem(STORAGE_CART,JSON.stringify(cart));notify('เพิ่มขวด '+bottle.id+' ลงตะกร้า');}
-  }catch(e){notify(e.message)}
-  // Remove query from browser URL so reload doesn't re-add the same QR.
-  try{const u=new URL(location.href);u.searchParams.delete('b');history.replaceState({},'',u.toString())}catch(e){}
+  
+  // 3. ดึงค่า Token (?b=...) จาก URL บน GitHub Pages
+  const urlParams = new URLSearchParams(window.location.search);
+  const FIRST_TOKEN = urlParams.get('b');
+
+  if(FIRST_TOKEN){
+    try{
+      const bottle=await call('bottleLookup',FIRST_TOKEN);
+      if(!bottle.available)notify('ขวด '+bottle.id+' เคยถูกบันทึกแล้ว');
+      else if(cart.some(x=>x.token===FIRST_TOKEN))notify('ขวดนี้อยู่ในตะกร้าแล้ว');
+      else{cart.push({token:FIRST_TOKEN,id:bottle.id});localStorage.setItem(STORAGE_CART,JSON.stringify(cart));notify('เพิ่มขวด '+bottle.id+' ลงตะกร้า');}
+    }catch(e){notify(e.message)}
+    
+    // ลบ ?b=... ออกจาก URL เพื่อไม่ให้เพิ่มขวดซ้ำเมื่อรีเฟรชหน้า
+    try{const u=new URL(location.href);u.searchParams.delete('b');history.replaceState({},'',u.toString())}catch(e){}
   }
   refreshBasket();
   if(pendingOrder){showPending()}
 }
+
 function refreshBasket(){cart=readJson(STORAGE_CART,[]);$('count').textContent=cart.length+' ขวด';$('total').textContent='฿'+(cart.length*50);$('buyBtn').disabled=!cart.length;
   $('basket').innerHTML=cart.length?cart.map(x=>'<div class="cartrow"><b>'+html(x.id)+'</b><button onclick="removeBottle(\''+html(x.token)+'\')">ลบ</button></div>').join(''):'<p class="muted">ยังไม่มีขวดในตะกร้า กรุณาสแกน QR บนขวด</p>';
 }
@@ -62,5 +89,5 @@ async function makeLabels(){try{
   }).join('');
   $('labels').scrollIntoView({behavior:'smooth'});notify('สร้างรายการ QR '+labels.length+' ดวง');
 }catch(e){notify(e.message)}}
+
 boot();
-</script>
