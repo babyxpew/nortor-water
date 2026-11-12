@@ -1,4 +1,4 @@
-// 1. ระบุ Web App URL ของ Google Apps Script (ใส่ URL /exec ของคุณ Chutima)
+// 1. ระบุ Web App URL ของ Google Apps Script
 const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbynGYcLN3jV7EKB3IDR-RQmS5I82HWS_6ENnmDCFatHtX7CUVy6g7GtsrU_LpNfsAA68A/exec";
 
 const $=id=>document.getElementById(id);
@@ -6,7 +6,7 @@ const STORAGE_CART='nortor_fresh_cart_2026';
 const STORAGE_PENDING='nortor_fresh_pending_2026';
 let cart=[],config=null,adminToken=null,pendingOrder=null;
 
-// 2. ปรับฟังก์ชัน call ให้ใช้ fetch API แทน google.script.run
+// 2. ฟังก์ชัน call สำหรับเชื่อมต่อกับ Google Apps Script
 async function call(name, ...args) {
   try {
     const response = await fetch(WEB_APP_URL, {
@@ -32,7 +32,6 @@ async function boot(){
   cart=readJson(STORAGE_CART,[]);
   pendingOrder=readJson(STORAGE_PENDING,null);
   
-  // 3. ดึงค่า Token (?b=...) จาก URL บน GitHub Pages
   const urlParams = new URLSearchParams(window.location.search);
   const FIRST_TOKEN = urlParams.get('b');
 
@@ -44,24 +43,56 @@ async function boot(){
       else{cart.push({token:FIRST_TOKEN,id:bottle.id});localStorage.setItem(STORAGE_CART,JSON.stringify(cart));notify('เพิ่มขวด '+bottle.id+' ลงตะกร้า');}
     }catch(e){notify(e.message)}
     
-    // ลบ ?b=... ออกจาก URL เพื่อไม่ให้เพิ่มขวดซ้ำเมื่อรีเฟรชหน้า
     try{const u=new URL(location.href);u.searchParams.delete('b');history.replaceState({},'',u.toString())}catch(e){}
   }
-  refreshBasket();
+  refreshBasket(true);
   if(pendingOrder){showPending()}
 }
 
-function refreshBasket(){cart=readJson(STORAGE_CART,[]);$('count').textContent=cart.length+' ขวด';$('total').textContent='฿'+(cart.length*50);$('buyBtn').disabled=!cart.length;
-  $('basket').innerHTML=cart.length?cart.map(x=>'<div class="cartrow"><b>'+html(x.id)+'</b><button onclick="removeBottle(\''+html(x.token)+'\')">ลบ</button></div>').join(''):'<p class="muted">ยังไม่มีขวดในตะกร้า กรุณาสแกน QR บนขวด</p>';
+// ฟังก์ชันอัปเดตตะกร้าฉบับแก้ไข (ตรวจสอบกับฐานข้อมูลจริงและขึ้นแจ้งเตือน)
+async function refreshBasket(silent = false) {
+  cart = readJson(STORAGE_CART, []);
+
+  if (!silent && cart.length > 0) {
+    try {
+      notify('กำลังตรวจสอบสถานะขวดในตะกร้า...');
+      const validCart = [];
+      for (const item of cart) {
+        const b = await call('bottleLookup', item.token);
+        if (b && b.available) {
+          validCart.push(item);
+        }
+      }
+      if (validCart.length !== cart.length) {
+        cart = validCart;
+        localStorage.setItem(STORAGE_CART, JSON.stringify(cart));
+        notify('อัปเดตตะกร้าแล้ว (ตัดขวดที่ถูกซื้อไปแล้วออก)');
+      } else {
+        notify('อัปเดตตะกร้าแล้ว ขวดทั้งหมดพร้อมชำระ');
+      }
+    } catch (e) {
+      notify(e.message);
+    }
+  } else if (!silent && cart.length === 0) {
+    notify('ยังไม่มีขวดในตะกร้า');
+  }
+
+  $('count').textContent = cart.length + ' ขวด';
+  $('total').textContent = '฿' + (cart.length * 50);
+  $('buyBtn').disabled = !cart.length;
+  $('basket').innerHTML = cart.length
+    ? cart.map(x => '<div class="cartrow"><b>' + html(x.id) + '</b><button type="button" onclick="removeBottle(\'' + html(x.token) + '\')">ลบ</button></div>').join('')
+    : '<p class="muted">ยังไม่มีขวดในตะกร้า กรุณาสแกน QR บนขวด</p>';
 }
-function removeBottle(token){cart=readJson(STORAGE_CART,[]).filter(x=>x.token!==token);localStorage.setItem(STORAGE_CART,JSON.stringify(cart));refreshBasket()}
+
+function removeBottle(token){cart=readJson(STORAGE_CART,[]).filter(x=>x.token!==token);localStorage.setItem(STORAGE_CART,JSON.stringify(cart));refreshBasket(true)}
 async function placeOrder(e){e.preventDefault();cart=readJson(STORAGE_CART,[]);if(!cart.length)return notify('กรุณาสแกนขวดก่อน');const btn=$('buyBtn');btn.disabled=true;try{
   const method=document.querySelector('input[name=paymentMethod]:checked').value;
   const result=await call('checkout',{name:$('buyer').value.trim(),tokens:cart.map(x=>x.token),paymentMethod:method});
-  pendingOrder=result;localStorage.setItem(STORAGE_PENDING,JSON.stringify(result));localStorage.removeItem(STORAGE_CART);cart=[];refreshBasket();showPending();notify('บันทึกรายการเรียบร้อย');
+  pendingOrder=result;localStorage.setItem(STORAGE_PENDING,JSON.stringify(result));localStorage.removeItem(STORAGE_CART);cart=[];refreshBasket(true);showPending();notify('บันทึกรายการเรียบร้อย');
 }catch(err){notify(err.message)}finally{btn.disabled=false}}
 function showPending(){if(!pendingOrder)return;$('buyerForm').classList.add('hidden');$('payment').classList.remove('hidden');$('orderDesc').textContent=pendingOrder.orderId+' · '+pendingOrder.qty+' ขวด';$('due').textContent='฿'+pendingOrder.total;const cash=pendingOrder.paymentMethod==='CASH';$('transferBox').classList.toggle('hidden',cash);$('slipBox').classList.toggle('hidden',cash);$('cashBox').classList.toggle('hidden',!cash);$('status').textContent=cash?'รอเจ้าของร้านยืนยันรับเงินสด':'รอชำระเงิน';}
-function startOver(){pendingOrder=null;localStorage.removeItem(STORAGE_PENDING);$('buyerForm').classList.remove('hidden');$('payment').classList.add('hidden');$('buyer').value='';$('confirmed').checked=false;$('slip').value='';$('uploadBtn').disabled=false;refreshBasket()}
+function startOver(){pendingOrder=null;localStorage.removeItem(STORAGE_PENDING);$('buyerForm').classList.remove('hidden');$('payment').classList.add('hidden');$('buyer').value='';$('confirmed').checked=false;$('slip').value='';$('uploadBtn').disabled=false;refreshBasket(true)}
 function copyPay(){if(!config||!config.promptpay)return notify('เจ้าของร้านยังไม่ตั้ง PromptPay');navigator.clipboard.writeText(config.promptpay).then(()=>notify('คัดลอกเลขพร้อมเพย์แล้ว')).catch(()=>notify('คัดลอกไม่ได้ กรุณาคัดลอกด้วยตนเอง'))}
 async function sendSlip(){if(!pendingOrder)return notify('ไม่พบรายการ');const f=$('slip').files[0];if(!f)return notify('กรุณาเลือกสลิป');if(!['image/jpeg','image/png','image/webp'].includes(f.type)||f.size>3000000)return notify('ใช้ภาพ JPG PNG WEBP ขนาดไม่เกิน 3 MB');$('uploadBtn').disabled=true;try{const data=await new Promise((ok,no)=>{const reader=new FileReader();reader.onload=()=>ok(reader.result);reader.onerror=no;reader.readAsDataURL(f)});await call('uploadSlip',{orderId:pendingOrder.orderId,secret:pendingOrder.secret,mime:f.type,data});$('status').textContent='ส่งสลิปแล้ว — รอเจ้าของร้านตรวจสอบ';notify('ส่งสลิปสำเร็จ')}catch(e){$('uploadBtn').disabled=false;notify(e.message)}}
 function viewShop(){screen('shop')}function viewAdminLogin(){screen('adminLogin')}
