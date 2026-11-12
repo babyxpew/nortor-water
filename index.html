@@ -1,11 +1,175 @@
-<!DOCTYPE html><html lang="th"><head><base target="_top"><?!= include_('Styles'); ?></head><body><div class="shell">
-<header><div class="logo">💧</div><div class="brand"><b>Nortor by faii</b><span>SELF-SERVICE WATER STORE</span></div><button class="ghost" onclick="viewAdminLogin()">เจ้าของร้าน</button></header>
-<section id="shop" class="pane"><div class="hero"><small>SMART FRIDGE</small><h1>สแกนหลายขวด<br>ชำระครั้งเดียว</h1><p>น้ำดื่มขวดละ 50 บาท · สแกน QR บนขวดแต่ละใบ</p></div>
-<div class="info"><div class="water">💧</div><div><b>น้ำดื่ม 600 ml</b><div class="unit">฿50 / ขวด</div></div></div>
-<div class="panel"><div class="line"><h2>ขวดที่สแกน</h2><span id="count">0 ขวด</span></div><div id="basket"><p class="muted">ยังไม่มีขวดในตะกร้า</p></div><div class="total"><span>ยอดรวม</span><b id="total">฿0</b></div><button class="outline" onclick="refreshBasket()">อัปเดตตะกร้า</button><p class="hint">หากสแกนหลายขวด ให้ใช้ Safari/Chrome เครื่องเดียวกันและเปิดด้วยเบราว์เซอร์เดิมทุกครั้ง</p></div>
-<form id="buyerForm" class="panel" onsubmit="placeOrder(event)"><h2>ข้อมูลผู้ซื้อ</h2><label>ชื่อหรือชื่อเล่น <input id="buyer" required maxlength="80" placeholder="เช่น ฝ้าย"></label><div class="pay-choice"><b>วิธีชำระเงิน</b><label><input type="radio" name="paymentMethod" value="PROMPTPAY" checked> โอน PromptPay + แนบสลิป</label><label><input type="radio" name="paymentMethod" value="CASH"> เงินสด (ให้เจ้าของร้านยืนยันเมื่อได้รับเงิน)</label></div><label class="check"><input type="checkbox" id="confirmed" required> ฉันหยิบขวดทั้งหมดนี้จากตู้แล้ว</label><button id="buyBtn" class="primary" type="submit">ยืนยันการหยิบและสร้างรายการ</button><p class="hint">ไม่มีการสมัครสมาชิก ชื่อที่กรอกเป็นข้อมูลแจ้งเอง ไม่ใช่การยืนยันตัวตน</p></form>
-<div id="payment" class="panel hidden"><h2>สร้างรายการเรียบร้อย</h2><p id="orderDesc" class="muted"></p><div id="due" class="due">฿0</div><div id="transferBox" class="paybox"><b>โอนเงินผ่าน PromptPay</b><div id="payId" class="payid">ยังไม่ได้ตั้งเลขพร้อมเพย์</div><button class="outline" onclick="copyPay()">คัดลอกเลขพร้อมเพย์</button><p class="hint">โอนจากแอปธนาคาร จากนั้นอัปโหลดสลิปด้านล่าง</p></div><div id="slipBox"><label>แนบรูปสลิป <input id="slip" type="file" accept="image/jpeg,image/png,image/webp"></label><button id="uploadBtn" class="primary" onclick="sendSlip()">อัปโหลดสลิป</button></div><div id="cashBox" class="paybox hidden"><b>ชำระเงินสด</b><p>กรุณานำเงินสดตามยอดรวมส่งให้เจ้าของร้านตามช่องทางที่ร้านกำหนด</p><small>ยังไม่ถือว่าชำระแล้วจนกว่าเจ้าของร้านจะได้รับเงินจริงและกดยืนยันใน Admin</small></div><p id="status" class="state">รอชำระเงิน</p><button class="outline" onclick="startOver()">เริ่มรายการใหม่</button></div></section>
-<section id="adminLogin" class="pane hidden"><button class="ghost" onclick="viewShop()">← กลับหน้าร้าน</button><h2>เข้าสู่ระบบเจ้าของร้าน</h2><form class="panel" onsubmit="login(event)"><label>รหัสผ่านผู้ดูแล <input type="password" id="adminPass" required></label><button class="primary">เข้าสู่ระบบ</button></form></section>
-<section id="admin" class="pane hidden"><div class="line"><h1>Dashboard</h1><button class="ghost" onclick="logout()">ออกจากระบบ</button></div><div class="stats"><div>พร้อมขาย<b id="available">0</b></div><div>ถูกหยิบ/บันทึกแล้ว<b id="claimed">0</b></div><div>รอชำระ<b id="pending">0</b></div><div>รอยืนยันเงินสด<b id="cashPending">0</b></div><div>รอตรวจสลิป<b id="verifying">0</b></div></div><div class="panel"><div class="line"><span>รับเงินวันนี้ (รายการที่อนุมัติแล้ว)</span><b id="sales">฿0</b></div></div><div class="tools"><button class="outline" onclick="refreshAdmin()">รีเฟรช</button><button class="outline" onclick="toggle('settings')">ตั้งค่า PromptPay</button><button class="outline" onclick="makeLabels()">สร้าง QR 50 ขวด</button></div><div id="settings" class="panel hidden"><h2>ตั้งค่ารับเงิน</h2><label>หมายเลข PromptPay <input id="promptpay" placeholder="เบอร์โทร/เลขประจำตัวที่ผูกพร้อมเพย์"></label><label>ชื่อบัญชี <input id="account" placeholder="ชื่อบัญชีผู้รับ"></label><button class="primary" onclick="savePay()">บันทึก</button></div><div class="panel"><h2>รายการซื้อ</h2><div id="orders" class="list"></div></div>
-<div id="labels" class="panel hidden"><h2>ฉลาก QR สำหรับขวดที่ยังไม่ขาย</h2><p class="muted">ทดสอบปุ่ม “เปิดลิงก์” ของ NBF-001 ก่อนพิมพ์ QR หากเปิดไม่ได้ให้ตรวจ PUBLIC_WEB_APP_URL</p><button class="primary" onclick="window.print()">พิมพ์ฉลาก QR</button><div id="labelsGrid" class="labels"></div></div></section><footer>Nortor by faii · Water Self-service</footer></div><div id="toast" class="toast"></div>
-<script>const FIRST_TOKEN=<?!= JSON.stringify(firstToken) ?>;</script><?!= include_('Client'); ?></body></html>
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nortor by faii</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="logo">💧</div>
+      <div class="brand">
+        <b>Nortor by faii</b>
+        <span>SELF-SERVICE WATER STORE</span>
+      </div>
+      <button class="ghost" onclick="viewAdminLogin()">เจ้าของร้าน</button>
+    </header>
+
+    <section id="shop" class="pane">
+      <div class="hero">
+        <small>SMART FRIDGE</small>
+        <h1>สแกนหลายขวด<br>ชำระครั้งเดียว</h1>
+        <p>น้ำดื่มขวดละ 50 บาท · สแกน QR บนขวดแต่ละใบ</p>
+      </div>
+
+      <div class="info">
+        <div class="water">💧</div>
+        <div>
+          <b>น้ำดื่ม 600 ml</b>
+          <div class="unit">฿50 / ขวด</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="line">
+          <h2>ขวดที่สแกน</h2>
+          <span id="count">0 ขวด</span>
+        </div>
+        <div id="basket">
+          <p class="muted">ยังไม่มีขวดในตะกร้า</p>
+        </div>
+        <div class="total">
+          <span>ยอดรวม</span>
+          <b id="total">฿0</b>
+        </div>
+        <button class="outline" onclick="refreshBasket()">อัปเดตตะกร้า</button>
+        <p class="hint">หากสแกนหลายขวด ให้ใช้ Safari/Chrome เครื่องเดียวกันและเปิดด้วยเบราว์เซอร์เดิมทุกครั้ง</p>
+      </div>
+
+      <form id="buyerForm" class="panel" onsubmit="placeOrder(event)">
+        <h2>ข้อมูลผู้ซื้อ</h2>
+        <label>
+          ชื่อหรือชื่อเล่น 
+          <input id="buyer" required maxlength="80" placeholder="เช่น ฝ้าย">
+        </label>
+        <div class="pay-choice">
+          <b>วิธีชำระเงิน</b>
+          <label>
+            <input type="radio" name="paymentMethod" value="PROMPTPAY" checked> โอน PromptPay + แนบสลิป
+          </label>
+          <label>
+            <input type="radio" name="paymentMethod" value="CASH"> เงินสด (ให้เจ้าของร้านยืนยันเมื่อได้รับเงิน)
+          </label>
+        </div>
+        <label class="check">
+          <input type="checkbox" id="confirmed" required> ฉันหยิบขวดทั้งหมดนี้จากตู้แล้ว
+        </label>
+        <button id="buyBtn" class="primary" type="submit">ยืนยันการหยิบและสร้างรายการ</button>
+        <p class="hint">ไม่มีการสมัครสมาชิก ชื่อที่กรอกเป็นข้อมูลแจ้งเอง ไม่ใช่การยืนยันตัวตน</p>
+      </form>
+
+      <div id="payment" class="panel hidden">
+        <h2>สร้างรายการเรียบร้อย</h2>
+        <p id="orderDesc" class="muted"></p>
+        <div id="due" class="due">฿0</div>
+        
+        <div id="transferBox" class="paybox">
+          <b>โอนเงินผ่าน PromptPay</b>
+          <div id="payId" class="payid">ยังไม่ได้ตั้งเลขพร้อมเพย์</div>
+          <button class="outline" onclick="copyPay()">คัดลอกเลขพร้อมเพย์</button>
+          <p class="hint">โอนจากแอปธนาคาร จากนั้นอัปโหลดสลิปด้านล่าง</p>
+        </div>
+
+        <div id="slipBox">
+          <label>
+            แนบรูปสลิป 
+            <input id="slip" type="file" accept="image/jpeg,image/png,image/webp">
+          </label>
+          <button id="uploadBtn" class="primary" onclick="sendSlip()">อัปโหลดสลิป</button>
+        </div>
+
+        <div id="cashBox" class="paybox hidden">
+          <b>ชำระเงินสด</b>
+          <p>กรุณานำเงินสดตามยอดรวมส่งให้เจ้าของร้านตามช่องทางที่ร้านกำหนด</p>
+          <small>ยังไม่ถือว่าชำระแล้วจนกว่าเจ้าของร้านจะได้รับเงินจริงและกดยืนยันใน Admin</small>
+        </div>
+
+        <p id="status" class="state">รอชำระเงิน</p>
+        <button class="outline" onclick="startOver()">เริ่มรายการใหม่</button>
+      </div>
+    </section>
+
+    <section id="adminLogin" class="pane hidden">
+      <button class="ghost" onclick="viewShop()">← กลับหน้าร้าน</button>
+      <h2>เข้าสู่ระบบเจ้าของร้าน</h2>
+      <form class="panel" onsubmit="login(event)">
+        <label>
+          รหัสผ่านผู้ดูแล 
+          <input type="password" id="adminPass" required>
+        </label>
+        <button class="primary">เข้าสู่ระบบ</button>
+      </form>
+    </section>
+
+    <section id="admin" class="pane hidden">
+      <div class="line">
+        <h1>Dashboard</h1>
+        <button class="ghost" onclick="logout()">ออกจากระบบ</button>
+      </div>
+      
+      <div class="stats">
+        <div>พร้อมขาย<b id="available">0</b></div>
+        <div>ถูกหยิบ/บันทึกแล้ว<b id="claimed">0</b></div>
+        <div>รอชำระ<b id="pending">0</b></div>
+        <div>รอยืนยันเงินสด<b id="cashPending">0</b></div>
+        <div>รอตรวจสลิป<b id="verifying">0</b></div>
+      </div>
+
+      <div class="panel">
+        <div class="line">
+          <span>รับเงินวันนี้ (รายการที่อนุมัติแล้ว)</span>
+          <b id="sales">฿0</b>
+        </div>
+      </div>
+
+      <div class="tools">
+        <button class="outline" onclick="refreshAdmin()">รีเฟรช</button>
+        <button class="outline" onclick="toggle('settings')">ตั้งค่า PromptPay</button>
+        <button class="outline" onclick="makeLabels()">สร้าง QR 50 ขวด</button>
+      </div>
+
+      <div id="settings" class="panel hidden">
+        <h2>ตั้งค่ารับเงิน</h2>
+        <label>
+          หมายเลข PromptPay 
+          <input id="promptpay" placeholder="เบอร์โทร/เลขประจำตัวที่ผูกพร้อมเพย์">
+        </label>
+        <label>
+          ชื่อบัญชี 
+          <input id="account" placeholder="ชื่อบัญชีผู้รับ">
+        </label>
+        <button class="primary" onclick="savePay()">บันทึก</button>
+      </div>
+
+      <div class="panel">
+        <h2>รายการซื้อ</h2>
+        <div id="orders" class="list"></div>
+      </div>
+
+      <div id="labels" class="panel hidden">
+        <h2>ฉลาก QR สำหรับขวดที่ยังไม่ขาย</h2>
+        <p class="muted">ทดสอบปุ่ม “เปิดลิงก์” ของ NBF-001 ก่อนพิมพ์ QR หากเปิดไม่ได้ให้ตรวจ PUBLIC_WEB_APP_URL</p>
+        <button class="primary" onclick="window.print()">พิมพ์ฉลาก QR</button>
+        <div id="labelsGrid" class="labels"></div>
+      </div>
+    </section>
+
+    <footer>Nortor by faii · Water Self-service</footer>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <script src="client.js"></script>
+</body>
+</html>
